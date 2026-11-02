@@ -1,10 +1,10 @@
 import { Plugin } from "../../types/options";
 import { Instance, DayElement } from "../../types/instance";
-import { clearNode, getEventTarget } from "../../utils/dom";
+import { clearNode, getEventTarget, toggleClass } from "../../utils/dom";
 
 export interface Config {
   /** years shown per page */
-  range: number;
+  yearsPerPage: number;
   /** columns of the year grid */
   columns: number;
   dateFormat: string;
@@ -15,7 +15,7 @@ export interface Config {
 export type YearElement = HTMLSpanElement & { dateObj: Date; $year: number };
 
 const defaultConfig: Config = {
-  range: 12,
+  yearsPerPage: 12,
   columns: 3,
   dateFormat: "Y",
   altFormat: "Y",
@@ -29,9 +29,22 @@ function firstDayOfYear(year: number): Date {
   return date;
 }
 
+function nextDay(date: Date): Date {
+  const next = new Date(date.getTime());
+  next.setHours(0, 0, 0, 0);
+  next.setDate(next.getDate() + 1);
+  return next;
+}
+
+// n modulo m, also for negative n
+const mod = (n: number, m: number) => ((n % m) + m) % m;
+
 function yearSelectPlugin(pluginConfig?: Partial<Config>): Plugin {
   const config = { ...defaultConfig, ...pluginConfig };
-  config.range = Math.max(1, Math.floor(config.range) || defaultConfig.range);
+  config.yearsPerPage = Math.max(
+    1,
+    Math.floor(config.yearsPerPage) || defaultConfig.yearsPerPage
+  );
   config.columns = Math.max(
     1,
     Math.floor(config.columns) || defaultConfig.columns
@@ -45,20 +58,12 @@ function yearSelectPlugin(pluginConfig?: Partial<Config>): Plugin {
     const self = {
       yearsContainer: null as null | HTMLDivElement,
       title: null as null | HTMLSpanElement,
-      // first year of the page on show
-      startYear: 0,
     };
 
     const minYear = () =>
       fp.config.minDate ? fp.config.minDate.getFullYear() : null;
     const maxYear = () =>
       fp.config.maxDate ? fp.config.maxDate.getFullYear() : null;
-
-    function isYearEnabled(year: number) {
-      const min = minYear();
-      const max = maxYear();
-      return (min === null || year >= min) && (max === null || year <= max);
-    }
 
     function clampYear(year: number) {
       const min = minYear();
@@ -68,35 +73,45 @@ function yearSelectPlugin(pluginConfig?: Partial<Config>): Plugin {
       return year;
     }
 
-    // The date picked for a year: January 1st, or minDate / maxDate when they
-    // fall within that year, as flatpickr drops dates out of bounds
-    function dateForYear(year: number): Date {
-      let date = firstDayOfYear(year);
-      if (fp.config.minDate && date < fp.config.minDate)
-        date = new Date(fp.config.minDate.getTime());
-      if (fp.config.maxDate && date > fp.config.maxDate)
-        date = new Date(fp.config.maxDate.getTime());
-      date.setHours(0, 0, 0, 0);
-      return date;
-    }
+    // Pages are aligned to multiples of yearsPerPage, so the page on show
+    // follows fp.currentYear alone, which every API call already moves
+    const pageStartOf = (year: number) => year - mod(year, config.yearsPerPage);
+    const pageStart = () => pageStartOf(fp.currentYear);
 
-    // A page centered on the year, short of pages lying wholly out of bounds
-    function pageStartFor(year: number) {
-      let start = year - Math.floor(config.range / 2);
+    // whether the page starting at `start` has a year within minDate / maxDate
+    function isPageInBounds(start: number) {
       const min = minYear();
       const max = maxYear();
-      if (max !== null && start + config.range - 1 > max)
-        start = max - config.range + 1;
-      if (min !== null && start < min) start = min;
-      return start;
+      return (
+        (min === null || start + config.yearsPerPage - 1 >= min) &&
+        (max === null || start <= max)
+      );
     }
 
-    const isInPage = (year: number) =>
-      year >= self.startYear && year < self.startYear + config.range;
+    // The date picked for a year: its first day that setDate keeps, checked
+    // with the same isEnabled(date, false) setDate filters by, so minDate's
+    // time, disable and enable are honored. None when no day can be picked.
+    function dateForYear(year: number): Date | undefined {
+      const min = minYear();
+      const max = maxYear();
+      if ((min !== null && year < min) || (max !== null && year > max))
+        return undefined;
+
+      let date = firstDayOfYear(year);
+      // start from minDate, keeping its time, when it falls within the year
+      if (fp.config.minDate && date < fp.config.minDate)
+        date = new Date(fp.config.minDate.getTime());
+
+      for (; date.getFullYear() === year; date = nextDay(date)) {
+        if (fp.isEnabled(date, false)) return date;
+      }
+
+      return undefined;
+    }
 
     function cellOf(year: number): YearElement | null {
-      const index = year - self.startYear;
-      if (!self.yearsContainer || index < 0 || index >= config.range)
+      const index = year - pageStart();
+      if (!self.yearsContainer || index < 0 || index >= config.yearsPerPage)
         return null;
       return self.yearsContainer.children[index] as YearElement;
     }
@@ -140,16 +155,13 @@ function yearSelectPlugin(pluginConfig?: Partial<Config>): Plugin {
       self.yearsContainer.setAttribute("role", "listbox");
       if (fp.config.mode !== "single")
         self.yearsContainer.setAttribute("aria-multiselectable", "true");
-      self.yearsContainer.style.gridTemplateColumns = `repeat(${config.columns}, 1fr)`;
 
       fp.rContainer.appendChild(self.yearsContainer);
 
+      fp.calendarContainer.classList.add("flatpickr-yearSelect");
       fp.calendarContainer.classList.add(
-        "flatpickr-yearSelect",
         `flatpickr-yearSelect-theme-${config.theme}`
       );
-
-      self.startYear = pageStartFor(fp.currentYear);
     }
 
     function buildYears() {
@@ -168,14 +180,17 @@ function yearSelectPlugin(pluginConfig?: Partial<Config>): Plugin {
           ? Math.max(...selectedYears)
           : null;
       const thisYear = new Date().getFullYear();
-      const lastYear = self.startYear + config.range - 1;
+      const startYear = pageStart();
+      const lastYear = startYear + config.yearsPerPage - 1;
+      const width = `${100 / config.columns}%`;
 
       clearNode(self.yearsContainer);
 
       const frag = document.createDocumentFragment();
 
-      for (let i = 0; i < config.range; i++) {
-        const year = self.startYear + i;
+      for (let i = 0; i < config.yearsPerPage; i++) {
+        const year = startYear + i;
+        const date = dateForYear(year);
         const selected = selectedYears.indexOf(year) !== -1;
 
         const cell = fp._createElement<YearElement>(
@@ -184,8 +199,10 @@ function yearSelectPlugin(pluginConfig?: Partial<Config>): Plugin {
           String(year)
         );
         cell.tabIndex = -1;
+        cell.style.width = width;
         cell.$year = year;
-        cell.dateObj = dateForYear(year);
+        // onMouseOver reads the date of every cell, disabled ones included
+        cell.dateObj = date || firstDayOfYear(year);
         cell.setAttribute("role", "option");
         cell.setAttribute("aria-label", String(year));
         cell.setAttribute("aria-selected", String(selected));
@@ -206,7 +223,7 @@ function yearSelectPlugin(pluginConfig?: Partial<Config>): Plugin {
           }
         }
 
-        if (isYearEnabled(year)) {
+        if (date) {
           cell.addEventListener("click", selectYear);
         } else {
           cell.classList.add("flatpickr-disabled");
@@ -218,24 +235,27 @@ function yearSelectPlugin(pluginConfig?: Partial<Config>): Plugin {
 
       self.yearsContainer.appendChild(frag);
 
-      const pageLabel = `${self.startYear} – ${lastYear}`;
+      const pageLabel = `${startYear} – ${lastYear}`;
       if (self.title) self.title.textContent = pageLabel;
       self.yearsContainer.setAttribute("aria-label", pageLabel);
 
-      const min = minYear();
-      const max = maxYear();
-      const prevDisabled = min !== null && self.startYear <= min;
-      const nextDisabled = max !== null && lastYear >= max;
-
-      fp.prevMonthNav.classList.toggle("flatpickr-disabled", prevDisabled);
-      fp.nextMonthNav.classList.toggle("flatpickr-disabled", nextDisabled);
+      toggleClass(
+        fp.prevMonthNav,
+        "flatpickr-disabled",
+        !isPageInBounds(startYear - config.yearsPerPage)
+      );
+      toggleClass(
+        fp.nextMonthNav,
+        "flatpickr-disabled",
+        !isPageInBounds(startYear + config.yearsPerPage)
+      );
       fp.prevMonthNav.setAttribute(
         "aria-label",
-        `${self.startYear - config.range} – ${self.startYear - 1}`
+        `${startYear - config.yearsPerPage} – ${startYear - 1}`
       );
       fp.nextMonthNav.setAttribute(
         "aria-label",
-        `${lastYear + 1} – ${lastYear + config.range}`
+        `${lastYear + 1} – ${lastYear + config.yearsPerPage}`
       );
 
       // rebuilding the cells loses the focus, so carry it over
@@ -245,30 +265,12 @@ function yearSelectPlugin(pluginConfig?: Partial<Config>): Plugin {
       }
     }
 
-    // Follow fp.currentYear, which setDate, clear, changeYear, jumpToDate and
-    // set("minDate"/"maxDate") all move, then rebuild the cells
-    function render() {
-      if (!self.yearsContainer) return;
-
-      if (!isInPage(fp.currentYear))
-        self.startYear = pageStartFor(fp.currentYear);
-
-      buildYears();
-    }
-
     function changePage(delta: number) {
-      const min = minYear();
-      const max = maxYear();
-      if (delta < 0 && min !== null && self.startYear <= min) return;
-      if (delta > 0 && max !== null && self.startYear + config.range - 1 >= max)
-        return;
+      const year = fp.currentYear + delta * config.yearsPerPage;
+      if (!isPageInBounds(pageStartOf(year))) return;
 
-      const start = self.startYear + delta * config.range;
-      self.startYear = start;
-      // keep fp.currentYear on the page, so redraws don't page back
-      fp.changeYear(clampYear(start + Math.floor(config.range / 2)));
-      self.startYear = start;
-      buildYears();
+      // a page in bounds holds the clamped year, which changeYear accepts
+      fp.changeYear(clampYear(year));
     }
 
     function bindEvents() {
@@ -299,23 +301,27 @@ function yearSelectPlugin(pluginConfig?: Partial<Config>): Plugin {
       );
     }
 
+    // a click and Enter both refuse a disabled year, and one that a range
+    // can't reach past a disabled date (marked by onMouseOver)
+    const isPickable = (cell: Element) =>
+      !cell.classList.contains("flatpickr-disabled") &&
+      !cell.classList.contains("notAllowed");
+
     function selectYear(e: Event) {
       e.preventDefault();
       e.stopPropagation();
 
       const eventTarget = getEventTarget(e);
 
-      if (!(eventTarget instanceof Element)) return;
-      if (eventTarget.classList.contains("flatpickr-disabled")) return;
-      if (eventTarget.classList.contains("notAllowed")) return;
+      if (!(eventTarget instanceof Element) || !isPickable(eventTarget)) return;
 
       setYear((eventTarget as YearElement).$year);
     }
 
     function setYear(year: number) {
-      if (!self.yearsContainer || !isYearEnabled(year)) return;
-
       const date = dateForYear(year);
+      if (!date) return;
+
       let selectedDates: Date[] = [];
 
       switch (fp.config.mode) {
@@ -330,24 +336,20 @@ function yearSelectPlugin(pluginConfig?: Partial<Config>): Plugin {
           );
           if (selectedDates.length === fp.selectedDates.length)
             selectedDates.push(date);
-          selectedDates.sort((a, b) => a.getTime() - b.getTime());
           break;
 
         case "range":
-          if (fp.selectedDates.length === 2) {
-            selectedDates = [date];
-          } else {
-            selectedDates = fp.selectedDates.concat([date]);
-            selectedDates.sort((a, b) => a.getTime() - b.getTime());
-          }
+          selectedDates =
+            fp.selectedDates.length === 2
+              ? [date]
+              : fp.selectedDates.concat([date]);
           break;
       }
 
-      // stay on the page that was clicked
-      const start = self.startYear;
       fp.setDate(selectedDates, true);
-      self.startYear = start;
-      buildYears();
+      // setDate shows the last selected date; stay on the year picked, as a
+      // click on a day does, and tell onYearChange where the view ends up
+      fp.jumpToDate(date, true);
 
       if (fp.config.closeOnSelect) {
         const single = fp.config.mode === "single";
@@ -378,8 +380,7 @@ function yearSelectPlugin(pluginConfig?: Partial<Config>): Plugin {
         active.$year !== undefined;
 
       if (e.keyCode === 13) {
-        if (isYearFocused && !active!.classList.contains("flatpickr-disabled"))
-          setYear(active!.$year);
+        if (isYearFocused && isPickable(active!)) setYear(active!.$year);
         return;
       }
 
@@ -401,28 +402,21 @@ function yearSelectPlugin(pluginConfig?: Partial<Config>): Plugin {
         return;
       }
 
+      // disabled years can be focused and passed over, only not picked
       const year = clampYear(active!.$year + shift);
-      if (year === active!.$year || !isYearEnabled(year)) return;
+      if (year === active!.$year) return;
 
       // moving past the edge of the page turns the page
-      if (!cellOf(year)) changePage(year < self.startYear ? -1 : 1);
+      if (!cellOf(year)) fp.changeYear(year);
 
       const cell = cellOf(year);
       if (cell) cell.focus();
     }
 
-    // reopen on the page of the selected year, or this year
+    // reopen on the page of the selected year, or this year; unlike
+    // changeYear, jumpToDate fires no onYearChange
     function onOpen() {
-      if (!self.yearsContainer) return;
-
-      const year = fp.selectedDates.length
-        ? fp.selectedDates[0].getFullYear()
-        : clampYear(new Date().getFullYear());
-
-      self.startYear = pageStartFor(year);
-      if (fp.currentYear !== year) fp.changeYear(year);
-      self.startYear = pageStartFor(year);
-      buildYears();
+      fp.jumpToDate();
     }
 
     function closeHook() {
@@ -454,14 +448,14 @@ function yearSelectPlugin(pluginConfig?: Partial<Config>): Plugin {
         fp.config.weekNumbers = false;
         fp.config.showMonths = 1;
       },
-      onDaysBuilt: render,
+      onDaysBuilt: buildYears,
       onOpen,
       onKeyDown,
       onReady: [
         clearUnnecessaryDOMElements,
         build,
         bindEvents,
-        render,
+        buildYears,
         () => {
           fp.config.onClose.push(closeHook);
           fp.loadedPlugins.push("yearSelect");

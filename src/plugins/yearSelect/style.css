@@ -4,9 +4,6 @@
 }
 
 .flatpickr-yearSelect-years {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 4px;
   margin: 10px 8px 8px;
 }
 
@@ -14,10 +11,6 @@
   display: inline-block;
   font-weight: 600;
   white-space: nowrap;
-}
-
-.flatpickr-yearSelect .flatpickr-current-month {
-  pointer-events: none;
 }
 
 .flatpickr-yearSelect-year {
@@ -28,7 +21,7 @@
   box-sizing: border-box;
   color: #393939;
   cursor: pointer;
-  display: block;
+  display: inline-block;
   font-weight: 400;
   padding: 10px;
   position: relative;

@@ -58,23 +58,19 @@ describe("yearSelect", () => {
       expect(fp.calendarContainer.querySelector(".dayContainer")).toBeNull();
       expect(fp.monthNav.querySelector(".cur-year")).toBeNull();
       expect(years(fp)).toHaveLength(12);
-      expect(title(fp)).toEqual("2014 – 2025");
+      expect(title(fp)).toEqual("2016 – 2027");
       expect(yearsWith(fp, "selected")).toEqual([2020]);
     });
 
-    it("honors the range and columns options", () => {
+    it("honors the yearsPerPage and columns options", () => {
       fp = createInstance(
-        { defaultDate: new Date(2020, 0, 1) },
-        { range: 20, columns: 4 }
+        { defaultDate: new Date(2030, 0, 1) },
+        { yearsPerPage: 20, columns: 4 }
       );
 
       expect(years(fp)).toHaveLength(20);
-      expect(title(fp)).toEqual("2010 – 2029");
-      expect(
-        (fp.calendarContainer.querySelector(
-          ".flatpickr-yearSelect-years"
-        ) as HTMLElement).style.gridTemplateColumns
-      ).toEqual("repeat(4, 1fr)");
+      expect(title(fp)).toEqual("2020 – 2039");
+      expect(cell(fp, 2030)!.style.width).toEqual("25%");
     });
 
     it("marks this year", () => {
@@ -87,11 +83,11 @@ describe("yearSelect", () => {
       fp = createInstance({ defaultDate: new Date(2020, 0, 1) });
 
       click(fp.nextMonthNav);
-      expect(title(fp)).toEqual("2026 – 2037");
+      expect(title(fp)).toEqual("2028 – 2039");
 
       click(fp.prevMonthNav);
       click(fp.prevMonthNav);
-      expect(title(fp)).toEqual("2002 – 2013");
+      expect(title(fp)).toEqual("2004 – 2015");
     });
 
     it("reopens on the page of the selected year", () => {
@@ -101,7 +97,21 @@ describe("yearSelect", () => {
       fp.close();
       fp.open();
 
-      expect(title(fp)).toEqual("2014 – 2025");
+      expect(title(fp)).toEqual("2016 – 2027");
+    });
+
+    it("doesn't fire onYearChange when reopening", () => {
+      const onYearChange = jest.fn();
+      fp = createInstance({ defaultDate: new Date(2020, 0, 1), onYearChange });
+      fp.open();
+      click(fp.nextMonthNav);
+      fp.close();
+      onYearChange.mockClear();
+
+      fp.open();
+
+      expect(title(fp)).toEqual("2016 – 2027");
+      expect(onYearChange).not.toHaveBeenCalled();
     });
   });
 
@@ -114,7 +124,7 @@ describe("yearSelect", () => {
     it("after setDate without triggering change", () => {
       fp.setDate(new Date(2031, 0, 1));
       expect(yearsWith(fp, "selected")).toEqual([2031]);
-      expect(title(fp)).toEqual("2025 – 2036");
+      expect(title(fp)).toEqual("2028 – 2039");
     });
 
     it("after clear", () => {
@@ -124,22 +134,17 @@ describe("yearSelect", () => {
 
     it('after set("minDate")', () => {
       fp.set("minDate", new Date(2018, 0, 1));
-      expect(yearsWith(fp, "flatpickr-disabled")).toEqual([
-        2014,
-        2015,
-        2016,
-        2017,
-      ]);
+      expect(yearsWith(fp, "flatpickr-disabled")).toEqual([2016, 2017]);
     });
 
     it("after changeYear", () => {
       fp.changeYear(2050);
-      expect(title(fp)).toEqual("2044 – 2055");
+      expect(title(fp)).toEqual("2040 – 2051");
     });
 
     it("after jumpToDate", () => {
       fp.jumpToDate(new Date(1990, 5, 1));
-      expect(title(fp)).toEqual("1984 – 1995");
+      expect(title(fp)).toEqual("1980 – 1991");
     });
 
     it("in inline mode", () => {
@@ -161,19 +166,19 @@ describe("yearSelect", () => {
     });
 
     it("disables the years out of bounds and the buttons at the ends", () => {
-      expect(title(fp)).toEqual("2019 – 2030");
+      expect(title(fp)).toEqual("2016 – 2027");
       expect(yearsWith(fp, "flatpickr-disabled")).toEqual([
+        2016,
+        2017,
+        2018,
         2027,
-        2028,
-        2029,
-        2030,
       ]);
       expect(fp.prevMonthNav.classList).toContain("flatpickr-disabled");
       expect(fp.nextMonthNav.classList).toContain("flatpickr-disabled");
     });
 
     it("ignores a click on a disabled year", () => {
-      click(cell(fp, 2028));
+      click(cell(fp, 2027));
       expect(fp.input.value).toEqual("2022");
     });
 
@@ -185,6 +190,52 @@ describe("yearSelect", () => {
       fp.open();
       click(cell(fp, 2026));
       expect(fp.selectedDates[0]).toEqual(new Date(2026, 0, 1));
+    });
+
+    it("keeps the time of minDate", () => {
+      fp.destroy();
+      const minDate = new Date(2019, 5, 15, 14, 30);
+      fp = createInstance({ minDate });
+      fp.open();
+      fp.changeYear(2019);
+
+      click(cell(fp, 2019));
+
+      expect(fp.selectedDates).toEqual([minDate]);
+      expect(fp.input.value).toEqual("2019");
+    });
+  });
+
+  describe("disable / enable", () => {
+    it("picks the first day of the year that isn't disabled", () => {
+      fp = createInstance({
+        defaultDate: new Date(2018, 0, 1),
+        disable: [new Date(2020, 0, 1)],
+      });
+      fp.open();
+
+      click(cell(fp, 2020));
+
+      expect(fp.selectedDates).toEqual([new Date(2020, 0, 2)]);
+      expect(fp.input.value).toEqual("2020");
+    });
+
+    it("disables the years without a day to pick", () => {
+      fp = createInstance({ enable: [new Date(2021, 4, 3)] });
+      fp.open();
+      fp.changeYear(2021);
+
+      expect(
+        years(fp)
+          .filter((el) => !el.classList.contains("flatpickr-disabled"))
+          .map((el) => Number(el.textContent))
+      ).toEqual([2021]);
+
+      click(cell(fp, 2020));
+      expect(fp.selectedDates).toEqual([]);
+
+      click(cell(fp, 2021));
+      expect(fp.selectedDates).toEqual([new Date(2021, 4, 3)]);
     });
   });
 
@@ -252,6 +303,25 @@ describe("yearSelect", () => {
       expect(fp.isOpen).toBe(true);
     });
 
+    it("stays on the page of the year picked in multiple mode", () => {
+      fp = createInstance({
+        mode: "multiple",
+        defaultDate: new Date(2020, 0, 1),
+      });
+      fp.open();
+      click(fp.prevMonthNav);
+
+      click(cell(fp, 2010));
+      expect(title(fp)).toEqual("2004 – 2015");
+
+      fp.redraw();
+      expect(title(fp)).toEqual("2004 – 2015");
+
+      click(cell(fp, 2010));
+      expect(title(fp)).toEqual("2004 – 2015");
+      expect(fp.selectedDates).toEqual([new Date(2020, 0, 1)]);
+    });
+
     describe("in range mode", () => {
       beforeEach(() => {
         fp = createInstance({
@@ -288,6 +358,34 @@ describe("yearSelect", () => {
         expect(yearsWith(fp, "endRange")).toEqual([2000]);
       });
 
+      it("tells onYearChange the year it stays on", () => {
+        const reported: number[] = [];
+        fp.set("onYearChange", (_: Date[], __: string, self: Instance) =>
+          reported.push(self.currentYear)
+        );
+        fp.set("closeOnSelect", false);
+
+        click(cell(fp, 2001));
+        click(fp.prevMonthNav);
+        click(cell(fp, 1985));
+
+        expect(title(fp)).toEqual("1980 – 1991");
+        expect(reported[reported.length - 1]).toEqual(1985);
+      });
+
+      it("doesn't pick past a disabled date with Enter", () => {
+        fp.set("disable", [new Date(1999, 3, 1)]);
+        click(cell(fp, 1997));
+        cell(fp, 2001)!.dispatchEvent(
+          new MouseEvent("mouseover", { bubbles: true })
+        );
+        cell(fp, 2001)!.focus();
+
+        keydown(fp, 13);
+
+        expect(fp.selectedDates).toEqual([new Date(1997, 0, 1)]);
+      });
+
       it("drops a half range on close", () => {
         click(cell(fp, 1997));
         fp.close();
@@ -316,7 +414,20 @@ describe("yearSelect", () => {
       keydown(fp, 38);
       keydown(fp, 38);
       expect(document.activeElement!.textContent).toEqual("2011");
-      expect(title(fp)).toEqual("2002 – 2013");
+      expect(title(fp)).toEqual("2004 – 2015");
+    });
+
+    it("passes over a disabled year without picking it", () => {
+      fp.set("disable", [(date: Date) => date.getFullYear() === 2021]);
+      cell(fp, 2020)!.focus();
+
+      keydown(fp, 39);
+      expect(document.activeElement!.textContent).toEqual("2021");
+      keydown(fp, 13);
+      expect(fp.input.value).toEqual("2020");
+
+      keydown(fp, 39);
+      expect(document.activeElement!.textContent).toEqual("2022");
     });
 
     it("selects with Enter", () => {
@@ -334,10 +445,10 @@ describe("yearSelect", () => {
       )!;
 
       expect(container.getAttribute("role")).toEqual("listbox");
-      expect(container.getAttribute("aria-label")).toEqual("2014 – 2025");
+      expect(container.getAttribute("aria-label")).toEqual("2016 – 2027");
       expect(cell(fp, 2020)!.getAttribute("role")).toEqual("option");
       expect(cell(fp, 2020)!.getAttribute("aria-selected")).toEqual("true");
-      expect(fp.prevMonthNav.getAttribute("aria-label")).toEqual("2002 – 2013");
+      expect(fp.prevMonthNav.getAttribute("aria-label")).toEqual("2004 – 2015");
     });
 
     it("adds the theme class", () => {
